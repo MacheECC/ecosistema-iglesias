@@ -1,4 +1,8 @@
-export default function register({ action, filter, init }, context) {
-  console.log("RLS HOOK: filesystem hook file was loaded");
-  // …your hook registrations here…
-}
+// dist/index.cjs (CommonJS)
+const { defineHook } = require('@directus/extensions-sdk');
+
+module.exports = defineHook(({ logger }) => ({
+  'app.after': async () => {
+    logger.info('RLS HOOK: filesystem hook file was loaded');
+  },
+}));

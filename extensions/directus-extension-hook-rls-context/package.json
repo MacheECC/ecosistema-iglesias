@@ -1,10 +1,13 @@
 {
   "name": "directus-extension-hook-rls-context",
   "version": "1.0.0",
-  "type": "module",
+  "description": "RLS context hook",
   "main": "dist/index.cjs",
+  "license": "MIT",
   "directus:extension": {
     "type": "hook",
-    "path": "dist/index.cjs"
+    "path": "./dist/index.cjs",
+    "source": "./index.cjs",
+    "host": "^10.0.0"
   }
 }
