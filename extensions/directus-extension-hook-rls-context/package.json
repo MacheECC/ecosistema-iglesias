@@ -4,6 +4,7 @@
   "type": "commonjs",
   "directus:extension": {
     "type": "hook",
-    "path": "./index.cjs"
+    "host": "api",
+    "source": "index.cjs"
   }
 }
