@@ -1,0 +1,10 @@
+{
+  "name": "directus-extension-hook-rls-context",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "directus:extension": {
+    "type": "hook",
+    "path": "dist/index.cjs"
+  }
+}

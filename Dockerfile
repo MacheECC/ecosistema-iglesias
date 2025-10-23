@@ -1,3 +1,3 @@
 FROM directus/directus:latest
-# copy only your current repo extensions (filesystem hook)
+RUN rm -rf /directus/extensions/*
 COPY ./extensions/ /directus/extensions/
