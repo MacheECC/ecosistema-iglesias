@@ -1,4 +1,4 @@
-const { defineHook } = require('@directus/extensions-sdk');
+const { defineHook } = require('directus/dist/utils/define-extension');
 
 module.exports = defineHook(({ init }) => {
   init('app.before', () => {
