@@ -1,2 +1,2 @@
 FROM directus/directus:latest
-COPY ./extensions/hooks/set-rls-context.js /directus/extensions/hooks/set-rls-context.js
+COPY ./extensions/hooks/set-rls-context /directus/extensions/hooks/set-rls-context
