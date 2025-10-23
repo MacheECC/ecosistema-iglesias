@@ -1,4 +1,4 @@
-export default ({ init }) => {
-  console.log('RLS HOOK: filesystem hook file was loaded');
-  init('server.start', () => console.log('RLS HOOK: server.start observed'));
+export default ({ init, logger }) => {
+  logger.info('RLS HOOK: filesystem hook file was loaded');
+  init('server.start', () => logger.info('RLS HOOK: server.start observed'));
 };
