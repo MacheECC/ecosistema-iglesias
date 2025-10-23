@@ -1,10 +1,11 @@
 {
   "name": "directus-extension-hook-rls-context",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "type": "commonjs",
   "directus:extension": {
     "type": "hook",
-    "host": "api",
-    "source": "index.cjs"
+    "path": "dist/index.cjs",
+    "source": "",
+    "host": "^11.0.0"
   }
 }
