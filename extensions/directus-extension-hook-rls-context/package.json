@@ -1,0 +1,9 @@
+{
+  "name": "directus-extension-hook-rls-context",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "directus:extension": {
+    "type": "hook",
+    "path": "./index.cjs"
+  }
+}
