@@ -1,8 +1,7 @@
 import { defineHook } from '@directus/extensions-sdk';
 
-export default defineHook(({ action }, { logger }) => {
-  logger.info('RLS HOOK: filesystem hook file was loaded'); // you'll see this in logs
-  action('items.read', (meta, ctx) => {
-    // your logic here, or keep empty to just prove it loads
-  });
+export default defineHook(({ logger }) => {
+  logger.info('RLS HOOK: packaged hook file was loaded');
+  // Add your hook registrations here, for example:
+  // on('items.read', 'iglesias', async (event) => { ... });
 });

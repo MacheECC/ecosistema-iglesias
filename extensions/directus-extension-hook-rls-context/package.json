@@ -2,10 +2,9 @@
   "name": "directus-extension-hook-rls-context",
   "version": "1.0.0",
   "type": "module",
-  "exports": "./dist/index.js",
   "directus:extension": {
-    "host": "directus",
     "type": "hook",
-    "path": "./dist/index.js"
+    "host": "^11.0.0",
+    "source": "./dist/index.js"
   }
 }

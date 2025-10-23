@@ -1,2 +1,2 @@
 FROM directus/directus:latest
-COPY ./extensions /directus/extensions
+COPY ./extensions/ /directus/extensions/
