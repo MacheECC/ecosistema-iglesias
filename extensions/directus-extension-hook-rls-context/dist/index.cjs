@@ -1,8 +1,10 @@
-// dist/index.cjs (CommonJS)
-const { defineHook } = require('@directus/extensions-sdk');
+"use strict";
 
-module.exports = defineHook(({ logger }) => ({
-  'app.after': async () => {
-    logger.info('RLS HOOK: filesystem hook file was loaded');
-  },
-}));
+const { defineHook } = require("@directus/extensions-sdk");
+
+module.exports = defineHook(({ action, logger }) => {
+  logger.info("RLS HOOK: filesystem hook file was loaded"); // will appear in logs after “Extensions loaded”
+  action("items.read", (meta) => {
+    // your logic…
+  });
+});
