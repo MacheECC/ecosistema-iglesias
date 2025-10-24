@@ -1,7 +1,8 @@
 /* export default ({ logger }) => {
 	console.log('RLS HOOK: packaged hook file was loaded')
 }; */
-import { defineHook } from 'directus/extensions';
+
+//import { defineHook } from 'directus/extensions';
 
 export default defineHook(({ action }, { database }) => {
 	console.log('RLS HOOK: packaged hook file was loaded');
