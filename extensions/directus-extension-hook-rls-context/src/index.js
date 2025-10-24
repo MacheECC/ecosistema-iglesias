@@ -1,22 +1,16 @@
-/* export default ({ logger }) => {
-	console.log('RLS HOOK: packaged hook file was loaded')
-}; */
-
-//import { defineHook } from 'directus/extensions';
-
-// index.js
-export default ({ action }, { database, logger }) => {
-  logger?.info?.('RLS HOOK: packaged hook file was loaded');
-
-  // Prefer scoping to a single request rather than all events:
-  action('request.start', async (_payload, { accountability }) => {
+export default ({ filter, action }, { database, logger }) => {
+  //
+  // 1. EARLY HOOK: runs before Directus actually handles the request
+  //    and before it does item queries.
+  //
+  filter('authenticate', async (payload, meta, { accountability, database }) => {
     const userId = accountability?.user || '';
     const isAdmin = !!accountability?.admin;
 
-    // Compute allowed iglesias as CSV
+    // Build list of iglesias for this user
     let allowedCSV = '';
-    try {
-      if (userId) {
+    if (userId) {
+      try {
         const rows = await database.raw(
           `
           SELECT array_to_string(array_agg(iglesia_id::text), ',') AS csv
@@ -27,31 +21,51 @@ export default ({ action }, { database, logger }) => {
         );
         const rec = (rows?.rows && rows.rows[0]) || rows?.[0] || {};
         allowedCSV = rec?.csv || '';
+      } catch (e) {
+        logger?.warn?.(`[rls] lookup failed: ${e?.message || e}`);
       }
-    } catch (e) {
-      logger?.warn?.(`[set-rls-context] lookup failed: ${e?.message || e}`);
-      allowedCSV = '';
     }
 
-    // Use set_config(...) so we can pass bind params safely
+    // Set per-request GUCs on THIS request's DB connection
     try {
-      // session-scope so Directus queries see them even outside a txn
       await database.raw(`SELECT set_config('app.user_id', ?, false)`, [userId]);
       await database.raw(`SELECT set_config('app.is_super_admin', ?, false)`, [isAdmin ? 'true' : 'false']);
       await database.raw(`SELECT set_config('app.allowed_iglesias', ?, false)`, [allowedCSV]);
     } catch (e) {
-      logger?.warn?.(`[set-rls-context] set_config failed: ${e?.message || e}`);
+      logger?.warn?.(`[rls] set_config failed: ${e?.message || e}`);
     }
 
-    // Cleanup after the request completes so pool connections don't leak state
-    return async () => {
-      try {
-        await database.raw(`RESET app.user_id`);
-        await database.raw(`RESET app.is_super_admin`);
-        await database.raw(`RESET app.allowed_iglesias`);
-      } catch (e) {
-        logger?.warn?.(`[set-rls-context] RESET failed: ${e?.message || e}`);
-      }
-    };
+    // 🔍 DEBUG: immediately read them back from the SAME connection
+    const check = await database.raw(
+      `
+      SELECT
+        current_setting('app.user_id', true)          AS user_id,
+        current_setting('app.is_super_admin', true)   AS is_super_admin,
+        current_setting('app.allowed_iglesias', true) AS allowed_iglesias
+      `
+    );
+
+    logger?.info?.({
+      msg: '[rls] context after set_config',
+      check: check?.rows?.[0],
+      req_user: userId,
+    });
+
+    // You MUST return payload in a filter hook
+    return payload;
+  });
+
+  //
+  // 2. LATE HOOK: after Directus sends the response.
+  //    We use this to clean up so pooled connections don’t leak user info.
+  //
+  action('response', async (_meta, { database }) => {
+    try {
+      await database.raw(`RESET app.user_id`);
+      await database.raw(`RESET app.is_super_admin`);
+      await database.raw(`RESET app.allowed_iglesias`);
+    } catch (e) {
+      logger?.warn?.(`[rls] RESET failed: ${e?.message || e}`);
+    }
   });
 };
