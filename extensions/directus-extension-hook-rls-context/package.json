@@ -4,7 +4,6 @@
   "type": "module",
   "directus:extension": {
     "type": "hook",
-    "host": "^11.0.0",
-    "source": "./dist/index.js"
+    "path": "./dist/index.js"
   }
 }

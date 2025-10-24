@@ -1,7 +1,6 @@
-import { defineHook } from '@directus/extensions-sdk';
-
-export default defineHook(({ logger }) => {
+// extensions/directus-extension-hook-rls-context/dist/index.js (ESM)
+export default ({ logger /*, action, filter, init, schedule */ }) => {
   logger.info('RLS HOOK: packaged hook file was loaded');
-  // Add your hook registrations here, for example:
-  // on('items.read', 'iglesias', async (event) => { ... });
-});
+  // register your actions/filters here, e.g.:
+  // action('items.read', async (meta, ctx) => { ... });
+};
