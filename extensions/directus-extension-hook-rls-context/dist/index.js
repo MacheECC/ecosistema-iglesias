@@ -1,1 +1,1 @@
-var a=({logger:a})=>{a.info("RLS HOOK: packaged hook file was loaded")};export{a as default};
+var o=({logger:o})=>{console.log("RLS HOOK: packaged hook file was loaded")};export{o as default};
