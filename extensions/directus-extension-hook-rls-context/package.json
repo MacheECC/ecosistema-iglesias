@@ -5,8 +5,6 @@
   "directus:extension": {
     "type": "hook",
     "host": "^11.0.0",
-    "path": {
-      "esm": "./dist/index.js"
-    }
+    "source": { "esm": "./dist/index.js" }
   }
 }
