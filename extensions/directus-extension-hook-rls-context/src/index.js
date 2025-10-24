@@ -1,13 +1,14 @@
-export default ({ filter, action }, { database, logger }) => {
-  //
-  // 1. EARLY HOOK: runs before Directus actually handles the request
-  //    and before it does item queries.
-  //
-  filter('authenticate', async (payload, meta, { accountability, database }) => {
+export default ({ filter, action }, { logger }) => {
+  // This runs BEFORE Directus actually queries the DB for any collection
+  filter('items.read', async (query, meta, context) => {
+    const { accountability, database } = context;
+    // meta.collection tells you which collection is being read
+    // query is the query object Directus will use
+
     const userId = accountability?.user || '';
     const isAdmin = !!accountability?.admin;
 
-    // Build list of iglesias for this user
+    // Build CSV of allowed iglesias
     let allowedCSV = '';
     if (userId) {
       try {
@@ -26,16 +27,19 @@ export default ({ filter, action }, { database, logger }) => {
       }
     }
 
-    // Set per-request GUCs on THIS request's DB connection
+    // Now set per-connection configs safely
     try {
-      await database.raw(`SELECT set_config('app.user_id', ?, false)`, [userId]);
-      await database.raw(`SELECT set_config('app.is_super_admin', ?, false)`, [isAdmin ? 'true' : 'false']);
-      await database.raw(`SELECT set_config('app.allowed_iglesias', ?, false)`, [allowedCSV]);
+      await database.raw(`SELECT set_config('app.user_id', ?, false)`, [userId || '']);
+      await database.raw(
+        `SELECT set_config('app.is_super_admin', ?, false)`,
+        [isAdmin ? 'true' : 'false']
+      );
+      await database.raw(`SELECT set_config('app.allowed_iglesias', ?, false)`, [allowedCSV || '']);
     } catch (e) {
       logger?.warn?.(`[rls] set_config failed: ${e?.message || e}`);
     }
 
-    // 🔍 DEBUG: immediately read them back from the SAME connection
+    // Debug log (this is what you were doing)
     const check = await database.raw(
       `
       SELECT
@@ -49,17 +53,15 @@ export default ({ filter, action }, { database, logger }) => {
       msg: '[rls] context after set_config',
       check: check?.rows?.[0],
       req_user: userId,
+      collection: meta.collection,
     });
 
-    // You MUST return payload in a filter hook
-    return payload;
+    // Important: return the (possibly modified) query so Directus continues.
+    return query;
   });
 
-  //
-  // 2. LATE HOOK: after Directus sends the response.
-  //    We use this to clean up so pooled connections don’t leak user info.
-  //
-  action('response', async (_meta, { database }) => {
+  // Cleanup after the response so pooled connections don't leak the previous user's context
+  action('response', async (_payload, { database }) => {
     try {
       await database.raw(`RESET app.user_id`);
       await database.raw(`RESET app.is_super_admin`);
