@@ -4,6 +4,9 @@
   "type": "module",
   "directus:extension": {
     "type": "hook",
-    "path": "./dist/index.js"
+    "host": "^11.0.0",
+    "path": {
+      "esm": "./dist/index.js"
+    }
   }
 }

@@ -1,6 +1,4 @@
-// extensions/directus-extension-hook-rls-context/dist/index.js (ESM)
-export default ({ logger /*, action, filter, init, schedule */ }) => {
+// ESM hook entry
+export default ({ logger /* action, filter, ... */ }) => {
   logger.info('RLS HOOK: packaged hook file was loaded');
-  // register your actions/filters here, e.g.:
-  // action('items.read', async (meta, ctx) => { ... });
 };
