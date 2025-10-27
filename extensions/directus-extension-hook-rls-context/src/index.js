@@ -1,139 +1,111 @@
-export default ({ filter, action }, { logger }) => {
-  logger?.info?.('[rls] hook loaded');
+// ================================================================
+// HOOK PILOTO DE RLS (FASE 1)
+// ---------------------------------------------------------------
+// Este hook establece el contexto de RLS (Row Level Security)
+// en PostgreSQL/Neon para cada request que llega a Directus.
+//
+// Objetivo:
+//   • Probar el flujo completo de variables de sesión:
+//       app.user_id
+//       app.is_super_admin
+//       app.allowed_iglesias
+//   • Activado solo para la colección "iglesias" durante la fase
+//     de validación inicial.
+//   • Posteriormente se ampliará a todas las tablas multitenant.
+// ================================================================
 
-  // UUID nulo seguro para evitar cadenas vacías
-  const NULL_UUID = '00000000-0000-0000-0000-000000000000';
+export default ({ action }, { database }) => {
+	console.log('RLS PILOTO: hook cargado correctamente');
 
-  async function computeAllowedCSV(database, userId) {
-    /*
-      Devuelve un CSV de iglesias permitidas para este usuario.
-      Si el usuario no tiene ninguna, devolvemos NULL_UUID,
-      para que las políticas RLS siempre reciban algo casteable.
-    */
-    if (!userId) return NULL_UUID;
+	// ------------------------------------------------------------
+	// Escuchamos todas las acciones. Cada vez que Directus ejecuta
+	// una operación (read, create, update, etc.), este hook se dispara.
+	// ------------------------------------------------------------
+	action('*', async (_payload, { accountability, collection }) => {
+		// --------------------------------------------------------
+		// 1) Verificar que exista un usuario autenticado.
+		// Si no hay usuario (por ejemplo, en endpoints públicos),
+		// no hacemos nada y salimos del hook.
+		// --------------------------------------------------------
+		if (!accountability?.user) return;
 
-    try {
-      const rows = await database.raw(
-        `
-        SELECT array_to_string(array_agg(iglesia_id::text), ',') AS csv
-        FROM public.usuarios_iglesias
-        WHERE user_id = ?
-        `,
-        [userId]
-      );
+		// --------------------------------------------------------
+		// 2) Limitamos la ejecución del hook solo a la colección
+		// "iglesias" para esta fase piloto. En fases posteriores,
+		// se eliminará esta condición para que aplique globalmente.
+		// --------------------------------------------------------
+		if (collection !== 'iglesias') return;
 
-      // knex/pg puede devolver { rows: [...] } o [ ... ] según versión
-      const rec = (rows?.rows && rows.rows[0]) || rows?.[0] || {};
-      const csv = rec?.csv;
+		// --------------------------------------------------------
+		// 3) Capturar los valores básicos de contexto:
+		//    - userId: identificador UUID del usuario Directus.
+		//    - isSuperAdmin: flag true/false según rol administrativo.
+		// --------------------------------------------------------
+		const userId = accountability.user; // directus_users.id
+		const isSuperAdmin = accountability.admin === true ? 'true' : 'false';
 
-      return csv && csv.trim() !== '' ? csv : NULL_UUID;
-    } catch (e) {
-      logger?.warn?.(`[rls] allowed iglesias lookup failed: ${e?.message || e}`);
-      return NULL_UUID;
-    }
-  }
+		// --------------------------------------------------------
+		// 4) Construir la lista CSV de iglesias permitidas.
+		// Buscamos en la tabla `usuarios_iglesias` todas las
+		// iglesias asociadas al usuario actual.
+		// --------------------------------------------------------
+		let allowedCSV = '';
+		try {
+			const result = await database.raw(
+				`
+				SELECT array_to_string(array_agg(iglesia_id::text), ',') AS csv
+				FROM public.usuarios_iglesias
+				WHERE user_id = ?
+				`,
+				[userId]
+			);
 
-  async function primeConnection({ accountability, database }, sourceTag) {
-    /*
-      Escribe las variables de sesión (GUCs) en ESTA conexión.
-      - app.user_id
-      - app.is_super_admin
-      - app.allowed_iglesias
+			// La estructura depende del cliente PostgreSQL interno.
+			// Para compatibilidad, probamos ambos formatos posibles.
+			const row =
+				(result?.rows && result.rows[0]) ||
+				result?.[0] ||
+				{ csv: '' };
 
-      IMPORTANTE: Nunca escribimos cadenas vacías ("").
-      Siempre escribimos valores casteables.
-    */
+			allowedCSV = row.csv || '';
+		} catch (err) {
+			console.warn('[RLS PILOTO] Error obteniendo allowed_iglesias:', err?.message || err);
+			allowedCSV = '';
+		}
 
-    const userId = accountability?.user || '';
-    const isAdmin = !!accountability?.admin;
+		// --------------------------------------------------------
+		// 5) SET de las variables de sesión en Postgres/Neon.
+		// Estas variables son leídas por las políticas RLS.
+		//
+		// Notas:
+		//   - Se usa `SET` en lugar de `SET LOCAL` porque Directus
+		//     no garantiza transacciones únicas por request.
+		//   - Luego se hace `RESET` manual para evitar contaminación
+		//     entre usuarios en el pool de conexiones.
+		// --------------------------------------------------------
+		try {
+			await database.raw(`SET app.user_id = ?`, [userId]);
+			await database.raw(`SET app.is_super_admin = ?`, [isSuperAdmin]);
+			await database.raw(`SET app.allowed_iglesias = ?`, [allowedCSV]);
+			console.log(`[RLS PILOTO] Contexto establecido para usuario ${userId}`);
+		} catch (err) {
+			console.warn('[RLS PILOTO] SET context falló:', err?.message || err);
+		}
 
-    const effectiveUserId = userId || NULL_UUID;
-    const allowedCSV = await computeAllowedCSV(database, userId);
-
-    try {
-      await database.raw(`SELECT set_config('app.user_id', ?, false)`, [
-        effectiveUserId,
-      ]);
-
-      await database.raw(`SELECT set_config('app.is_super_admin', ?, false)`, [
-        isAdmin ? 'true' : 'false',
-      ]);
-
-      await database.raw(`SELECT set_config('app.allowed_iglesias', ?, false)`, [
-        allowedCSV,
-      ]);
-    } catch (e) {
-      logger?.warn?.(
-        `[rls] set_config failed [${sourceTag}]: ${e?.message || e}`
-      );
-    }
-
-    // DEBUG opcional: leer de vuelta
-    try {
-      const check = await database.raw(
-        `
-        SELECT
-          current_setting('app.user_id', true)          AS user_id,
-          current_setting('app.is_super_admin', true)   AS is_super_admin,
-          current_setting('app.allowed_iglesias', true) AS allowed_iglesias
-        `
-      );
-
-      logger?.info?.({
-        msg: `[rls] context after set_config (${sourceTag})`,
-        check: check?.rows?.[0],
-        req_user: userId || '(none)',
-      });
-    } catch (e) {
-      logger?.warn?.(`[rls] verify failed [${sourceTag}]: ${e?.message || e}`);
-    }
-  }
-
-  /* =========================================================
-     CAPA GLOBAL (authenticate)
-     ---------------------------------------------------------
-     Se ejecuta temprano en el ciclo de request. Cubre:
-     - vistas de archivos,
-     - agregaciones,
-     - llamadas internas de Directus que NO pasan por items.query.
-  */
-  filter('authenticate', async (payload, meta, context) => {
-    await primeConnection(context, 'authenticate');
-    return payload; // los filtros SIEMPRE devuelven su payload
-  });
-
-  /* =========================================================
-     CAPA POR COLECCIÓN (items.query / items.read)
-     ---------------------------------------------------------
-     Se ejecuta justo antes de que Directus haga SELECTs reales
-     contra una collection. Esto garantiza que si Directus
-     abre otra conexión del pool, también la prime.
-  */
-  filter('items.query', async (query, meta, context) => {
-    await primeConnection(context, `items.query:${meta.collection}`);
-    return query;
-  });
-
-  filter('items.read', async (payload, meta, context) => {
-    await primeConnection(context, `items.read:${meta.collection}`);
-    return payload;
-  });
-
-  /* =========================================================
-     LIMPIEZA (response)
-     ---------------------------------------------------------
-     Después de enviar la respuesta HTTP, reseteamos las GUCs
-     para que la conexión vuelva limpia al pool.
-  */
-  action('response', async (_payload, context) => {
-    const { database } = context;
-
-    try {
-      await database.raw('RESET app.user_id');
-      await database.raw('RESET app.is_super_admin');
-      await database.raw('RESET app.allowed_iglesias');
-    } catch (e) {
-      logger?.warn?.(`[rls] RESET failed: ${e?.message || e}`);
-    }
-  });
+		// --------------------------------------------------------
+		// 6) Cleanup: al finalizar la request, reseteamos todas las
+		// variables de sesión para que la conexión del pool quede
+		// limpia antes de ser reutilizada por otro usuario.
+		// --------------------------------------------------------
+		return async () => {
+			try {
+				await database.raw('RESET app.user_id');
+				await database.raw('RESET app.is_super_admin');
+				await database.raw('RESET app.allowed_iglesias');
+				console.log(`[RLS PILOTO] Contexto limpiado para usuario ${userId}`);
+			} catch (err) {
+				console.warn('[RLS PILOTO] RESET falló:', err?.message || err);
+			}
+		};
+	});
 };
