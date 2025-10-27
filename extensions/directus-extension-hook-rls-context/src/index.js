@@ -1,54 +1,66 @@
 // ================================================================
-// HOOK PILOTO DE RLS (FASE 1)
+// HOOK RLS (FASE 1.1 - CONTEXTO GLOBAL)
 // ---------------------------------------------------------------
 // Este hook establece el contexto de RLS (Row Level Security)
-// en PostgreSQL/Neon para cada request que llega a Directus.
+// en PostgreSQL/Neon para cada request autenticada que llega
+// a Directus.
 //
-// Objetivo:
-//   • Probar el flujo completo de variables de sesión:
-//       app.user_id
-//       app.is_super_admin
-//       app.allowed_iglesias
-//   • Activado solo para la colección "iglesias" durante la fase
-//     de validación inicial.
-//   • Posteriormente se ampliará a todas las tablas multitenant.
+// Diferencias contra la versión piloto anterior:
+//   - Antes: solo aplicaba si collection === 'iglesias'.
+//   - Ahora: aplica SIEMPRE que haya usuario autenticado,
+//     sin importar la colección, porque Directus a veces hace
+//     consultas internas (counts, agregates, lookups de archivos)
+//     que no etiquetan correctamente la colección.
+//
+// Este cambio es necesario para que el super admin pueda ver
+// contenido sin quedarse "ciego" por falta de contexto.
 // ================================================================
 
 export default ({ action }, { database }) => {
-	console.log('RLS PILOTO: hook cargado correctamente');
+	console.log('RLS: hook cargado (contexto global activado)');
 
 	// ------------------------------------------------------------
 	// Escuchamos todas las acciones. Cada vez que Directus ejecuta
-	// una operación (read, create, update, etc.), este hook se dispara.
+	// una operación (read, create, update, delete, aggregate, etc.),
+	// este hook se dispara.
+	//
+	// Nota importante:
+	//  - Este hook corre ANTES de que Directus ejecute la(s) query(s)
+	//    reales contra la base.
+	//  - Lo que hacemos aquí es "inyectar identidad" en la conexión.
 	// ------------------------------------------------------------
-	action('*', async (_payload, { accountability, collection }) => {
+	action('*', async (_payload, { accountability /*, collection */ }) => {
 		// --------------------------------------------------------
 		// 1) Verificar que exista un usuario autenticado.
-		// Si no hay usuario (por ejemplo, en endpoints públicos),
-		// no hacemos nada y salimos del hook.
+		// Si no hay usuario (por ejemplo, endpoints públicos,
+		// assets públicos, etc.), no seteamos contexto.
+		//
+		// Esto evita forzar casts con valores vacíos tipo ''::uuid
+		// en las policies.
 		// --------------------------------------------------------
 		if (!accountability?.user) return;
 
 		// --------------------------------------------------------
-		// 2) Limitamos la ejecución del hook solo a la colección
-		// "iglesias" para esta fase piloto. En fases posteriores,
-		// se eliminará esta condición para que aplique globalmente.
-		// --------------------------------------------------------
-		if (collection !== 'iglesias') return;
-
-		// --------------------------------------------------------
-		// 3) Capturar los valores básicos de contexto:
-		//    - userId: identificador UUID del usuario Directus.
-		//    - isSuperAdmin: flag true/false según rol administrativo.
+		// 2) Capturar los valores básicos de contexto:
+		//
+		//    - userId:
+		//        UUID del usuario Directus actual (directus_users.id).
+		//        Lo usamos para depuración y para posibles políticas
+		//        que necesiten saber "yo soy este usuario".
+		//
+		//    - isSuperAdmin:
+		//        'true' si este usuario es admin global de Directus.
+		//        Esto se convierte en bypass total dentro de las
+		//        policies usando app_is_super_admin().
+		//
+		//    - allowedCSV:
+		//        Lista CSV de iglesia_id (UUIDs) a las que este
+		//        usuario pertenece, según la tabla public.usuarios_iglesias.
+		//        Esta lista gobierna qué filas puede ver/modificar.
 		// --------------------------------------------------------
 		const userId = accountability.user; // directus_users.id
 		const isSuperAdmin = accountability.admin === true ? 'true' : 'false';
 
-		// --------------------------------------------------------
-		// 4) Construir la lista CSV de iglesias permitidas.
-		// Buscamos en la tabla `usuarios_iglesias` todas las
-		// iglesias asociadas al usuario actual.
-		// --------------------------------------------------------
 		let allowedCSV = '';
 		try {
 			const result = await database.raw(
@@ -60,8 +72,8 @@ export default ({ action }, { database }) => {
 				[userId]
 			);
 
-			// La estructura depende del cliente PostgreSQL interno.
-			// Para compatibilidad, probamos ambos formatos posibles.
+			// El cliente knex/pg puede devolver .rows[0] (pg nativo)
+			// o [0] (sqlite style, pero no aplica aquí).
 			const row =
 				(result?.rows && result.rows[0]) ||
 				result?.[0] ||
@@ -69,42 +81,72 @@ export default ({ action }, { database }) => {
 
 			allowedCSV = row.csv || '';
 		} catch (err) {
-			console.warn('[RLS PILOTO] Error obteniendo allowed_iglesias:', err?.message || err);
+			console.warn('[RLS] Error obteniendo allowed_iglesias:', err?.message || err);
 			allowedCSV = '';
 		}
 
 		// --------------------------------------------------------
-		// 5) SET de las variables de sesión en Postgres/Neon.
-		// Estas variables son leídas por las políticas RLS.
+		// 3) SET de las variables de sesión en Postgres/Neon.
 		//
-		// Notas:
-		//   - Se usa `SET` en lugar de `SET LOCAL` porque Directus
-		//     no garantiza transacciones únicas por request.
-		//   - Luego se hace `RESET` manual para evitar contaminación
-		//     entre usuarios en el pool de conexiones.
+		// Estas variables serán leídas dentro de las policies RLS:
+		//   - app.user_id
+		//   - app.is_super_admin
+		//   - app.allowed_iglesias
+		//
+		// Nota técnica:
+		//   - No usamos SET LOCAL porque Directus no garantiza
+	//     que cada request viva en una única transacción BEGIN..COMMIT.
+		//
+		//   - En su lugar hacemos SET "normal" y luego hacemos
+		//     RESET manual cuando la request termina (cleanup).
+		//
+		//   - Esto es crítico para evitar fugas de contexto entre
+		//     conexiones reutilizadas del pool (usuario A heredando
+		//     permisos de usuario B o del super admin).
 		// --------------------------------------------------------
 		try {
 			await database.raw(`SET app.user_id = ?`, [userId]);
 			await database.raw(`SET app.is_super_admin = ?`, [isSuperAdmin]);
 			await database.raw(`SET app.allowed_iglesias = ?`, [allowedCSV]);
-			console.log(`[RLS PILOTO] Contexto establecido para usuario ${userId}`);
+
+			console.log(
+				'[RLS] Contexto establecido:',
+				{
+					user_id: userId,
+					is_super_admin: isSuperAdmin,
+					allowed_iglesias: allowedCSV,
+				}
+			);
 		} catch (err) {
-			console.warn('[RLS PILOTO] SET context falló:', err?.message || err);
+			console.warn('[RLS] SET context falló:', err?.message || err);
 		}
 
 		// --------------------------------------------------------
-		// 6) Cleanup: al finalizar la request, reseteamos todas las
-		// variables de sesión para que la conexión del pool quede
-		// limpia antes de ser reutilizada por otro usuario.
+		// 4) Cleanup final.
+		//
+		// Directus permite que este hook retorne una función async.
+		// Esa función se ejecuta al final de la request.
+		//
+		// Aquí hacemos RESET de todas las variables de sesión
+		// que seteamos arriba, para que la conexión del pool
+		// vuelva limpia y no contamine al siguiente usuario.
 		// --------------------------------------------------------
 		return async () => {
 			try {
 				await database.raw('RESET app.user_id');
 				await database.raw('RESET app.is_super_admin');
 				await database.raw('RESET app.allowed_iglesias');
-				console.log(`[RLS PILOTO] Contexto limpiado para usuario ${userId}`);
+
+				console.log(
+					'[RLS] Contexto limpiado:',
+					{
+						user_id: userId,
+						is_super_admin: isSuperAdmin,
+						allowed_iglesias: allowedCSV,
+					}
+				);
 			} catch (err) {
-				console.warn('[RLS PILOTO] RESET falló:', err?.message || err);
+				console.warn('[RLS] RESET falló:', err?.message || err);
 			}
 		};
 	});
